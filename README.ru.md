@@ -18,7 +18,7 @@
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-1ed760)
 
-<img src="assets/preview.png" width="380" alt="Плеер TuneCast в Telegram">
+<img src="assets/preview.ru.png" width="380" alt="Плеер TuneCast в Telegram">
 
 </div>
 
@@ -111,7 +111,7 @@ tunecast/
   emoji_art.py      анимированные иконки, нарисованные кодом (Lottie)
   profile_music.py  трек в «Музыке профиля»
   audio.py          беззвучный MP3 для профиля
-assets/             иконка, логотип и картинка для README
+assets/             иконка, логотип и картинки для README
 tools/make_assets.py  генерация иконки и логотипа
 ```
 </details>

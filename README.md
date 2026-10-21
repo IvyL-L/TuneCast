@@ -113,7 +113,7 @@ tunecast/
   emoji_art.py      animated icons drawn in code (Lottie)
   profile_music.py  track in the profile's music section
   audio.py          silent MP3 for the profile
-assets/             icon, logo and README image
+assets/             icon, logo and README images
 tools/make_assets.py  generates the icon and logo
 ```
 </details>
