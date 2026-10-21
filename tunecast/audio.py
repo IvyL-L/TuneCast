@@ -1,14 +1,14 @@
-"""Генерация беззвучного MP3 для «Музыки в профиле» и заглушки-обложки."""
+"""Silent MP3 for the profile music section, and a placeholder cover."""
 
 import math
 import struct
 import zlib
 from functools import lru_cache
 
-# MPEG-2 Layer III, 8 кбит/с, 16 кГц, моно: кадр 36 байт ≈ 36 мс тишины
+# MPEG-2 Layer III, 8 kbit/s, 16 kHz, mono: a 36-byte frame ≈ 36 ms of silence
 _FRAME = bytes([0xFF, 0xF3, 0x18, 0xC0]) + bytes(32)
 _FRAME_SECONDS = 576 / 16000
-MAX_SECONDS = 15 * 60  # ~0.9 МБ, длиннее не нужно
+MAX_SECONDS = 15 * 60  # ~0.9 MB, no need for longer
 
 
 def _syncsafe(n: int) -> bytes:
@@ -16,12 +16,12 @@ def _syncsafe(n: int) -> bytes:
 
 
 def _id3_frame(frame_id: str, text: str) -> bytes:
-    data = b"\x01" + text.encode("utf-16")  # UTF-16 с BOM
+    data = b"\x01" + text.encode("utf-16")  # UTF-16 with BOM
     return frame_id.encode() + len(data).to_bytes(4, "big") + b"\x00\x00" + data
 
 
 def silent_mp3(seconds: int, title: str, performer: str) -> bytes:
-    """Тишина нужной длины с ID3-тегами названия и исполнителя."""
+    """Silence of the given length with ID3 title and artist tags."""
     seconds = max(1, min(int(seconds), MAX_SECONDS))
     frames = _id3_frame("TIT2", title) + _id3_frame("TPE1", performer)
     tag = b"ID3\x03\x00\x00" + _syncsafe(len(frames)) + frames
@@ -30,7 +30,7 @@ def silent_mp3(seconds: int, title: str, performer: str) -> bytes:
 
 @lru_cache(maxsize=1)
 def placeholder_png(size: int = 512) -> bytes:
-    """Тёмно-зелёный градиент, когда у трека нет обложки."""
+    """A dark green gradient for tracks without a cover."""
     top, bottom = (0x1D, 0xB9, 0x54), (0x10, 0x10, 0x10)
     raw = bytearray()
     for y in range(size):

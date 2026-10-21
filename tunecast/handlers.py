@@ -5,13 +5,16 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from aiogram import BaseMiddleware, F, Router
+from aiogram import BaseMiddleware, Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message, TelegramObject
 
 from . import ui
-from .emoji import LABELS, Emoji
+from .botmeta import set_commands
+from .config import save_settings
+from .emoji import KEYS, Emoji
+from .i18n import LANGUAGES, set_lang, t
 from .panel import Panel, rich
 from .spotify import NoActiveDevice, PremiumRequired, Spotify, SpotifyError
 
@@ -34,19 +37,24 @@ class LRU(OrderedDict):
             self.popitem(last=False)
 
 
-searches: LRU = LRU(50)  # message_id -> поисковый запрос
-track_names: LRU = LRU(500)  # track_id -> «Название — Исполнитель»
-emoji_waiting: dict[int, str] = {}  # chat_id -> ключ иконки, для которой ждём эмодзи
+searches: LRU = LRU(50)  # message_id -> search query
+track_names: LRU = LRU(500)  # track_id -> "Title — Artist"
+emoji_waiting: dict[int, str] = {}  # chat_id -> icon key we are waiting an emoji for
 
 
 class PremiumWatcher(BaseMiddleware):
-    """Следит, есть ли у владельца Telegram Premium, и переключает эмодзи."""
+    """Tracks whether the owner has Telegram Premium and switches emoji accordingly."""
 
     def __init__(self, emoji: Emoji, panel: Panel):
         self.emoji = emoji
         self.panel = panel
 
-    async def __call__(self, handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]], event: TelegramObject, data: dict[str, Any]) -> Any:
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
         user = getattr(event, "from_user", None)
         if user is not None and self.emoji.set_premium(user.is_premium):
             asyncio.create_task(self.panel.redraw())
@@ -55,11 +63,15 @@ class PremiumWatcher(BaseMiddleware):
 
 async def alert(cb: CallbackQuery, exc: SpotifyError) -> None:
     log.warning("Spotify: %s", exc)
-    await cb.answer(f"⚠️ Spotify: {exc.message}"[:200], show_alert=True)
+    await cb.answer(t("t.spotify_error", msg=exc.message)[:200], show_alert=True)
+
+
+async def send(message: Message, html: str) -> Message:
+    return await message.bot.send_rich_message(message.chat.id, rich_message=rich(html))
 
 
 async def run_action(cb: CallbackQuery, sp: Spotify, panel: Panel, action: Callable[[], Awaitable[None]]) -> bool:
-    """Выполнить команду Spotify. Если нет активного устройства, выбрать его."""
+    """Run a Spotify command. If no device is active, pick one."""
     try:
         try:
             await action()
@@ -67,10 +79,10 @@ async def run_action(cb: CallbackQuery, sp: Spotify, panel: Panel, action: Calla
         except NoActiveDevice:
             devices = [d for d in await sp.devices() if d.get("id") and not d.get("is_restricted")]
             if not devices:
-                await cb.answer("😴 Нет доступных устройств.\nОткрой Spotify на ПК или телефоне.", show_alert=True)
+                await cb.answer(t("t.no_devices"), show_alert=True)
                 return False
             if len(devices) > 1:
-                await cb.answer("📱 Выбери, где играть")
+                await cb.answer(t("t.pick_device"))
                 if panel.message_id:
                     await panel.show("devices")
                 else:
@@ -81,9 +93,9 @@ async def run_action(cb: CallbackQuery, sp: Spotify, panel: Panel, action: Calla
             await action()
             return True
     except PremiumRequired:
-        await cb.answer("💎 Для управления нужен Spotify Premium", show_alert=True)
+        await cb.answer(t("t.premium"), show_alert=True)
     except NoActiveDevice:
-        await cb.answer("😴 Устройство не отвечает. Открой Spotify и попробуй ещё раз.", show_alert=True)
+        await cb.answer(t("t.device_silent"), show_alert=True)
     except SpotifyError as exc:
         await alert(cb, exc)
     return False
@@ -100,13 +112,13 @@ def build_router(allowed_ids: frozenset[int]) -> Router:
     router.message.filter(F.from_user.id.in_(allowed_ids))
     router.callback_query.filter(F.from_user.id.in_(allowed_ids))
 
-    # ---------- команды ----------
+    # ---------- commands ----------
 
     async def open_panel(message: Message, panel: Panel, view: str) -> None:
         try:
             await panel.send_new(message.chat.id, view)
         except SpotifyError as exc:
-            await message.answer(f"⚠️ <b>Spotify:</b> {exc.message}")
+            await message.answer(t("t.spotify_error", msg=exc.message))
         try:
             await message.delete()
         except TelegramBadRequest:
@@ -132,14 +144,22 @@ def build_router(allowed_ids: frozenset[int]) -> Router:
 
     @router.message(Command("help"))
     async def cmd_help(message: Message, emoji: Emoji):
-        await message.bot.send_rich_message(message.chat.id, rich_message=rich(ui.help_view(emoji)))
+        await send(message, ui.help_view(emoji))
 
     @router.message(Command("emoji"))
     async def cmd_emoji(message: Message, emoji: Emoji):
         emoji_waiting.pop(message.chat.id, None)
-        await message.bot.send_rich_message(message.chat.id, rich_message=rich(ui.emoji_view(emoji, LABELS)))
+        await send(message, ui.emoji_view(emoji, KEYS))
 
-    # ---------- эмодзи для замены ----------
+    @router.message(Command("language", "lang"))
+    async def cmd_language(message: Message, emoji: Emoji):
+        await send(message, ui.language_view(emoji))
+        try:
+            await message.delete()
+        except TelegramBadRequest:
+            pass
+
+    # ---------- emoji replacement ----------
 
     @router.message(lambda m: m.chat.id in emoji_waiting)
     async def on_emoji(message: Message, emoji: Emoji, panel: Panel):
@@ -147,17 +167,16 @@ def build_router(allowed_ids: frozenset[int]) -> Router:
         custom = next((ent for ent in message.entities or [] if ent.type == "custom_emoji"), None)
         text = message.text or ""
         if custom:
-            char = custom.extract_from(text)
-            emoji.set_override(key, custom.custom_emoji_id, char)
+            emoji.set_override(key, custom.custom_emoji_id, custom.extract_from(text))
         elif text.strip() and len(text.strip()) <= 8:
             emoji.set_override(key, None, text.strip())
         else:
-            await message.answer("Это не похоже на эмодзи. Нажми «изменить» ещё раз и пришли один эмодзи.")
+            await message.answer(t("emoji.not_emoji"))
             return
-        await message.bot.send_rich_message(message.chat.id, rich_message=rich(ui.emoji_view(emoji, LABELS)))
+        await send(message, ui.emoji_view(emoji, KEYS))
         await panel.redraw()
 
-    # ---------- текст: ссылка или поиск ----------
+    # ---------- text: a link or a search ----------
 
     @router.message(F.text & ~F.text.startswith("/"))
     async def on_text(message: Message, sp: Spotify, emoji: Emoji):
@@ -169,10 +188,10 @@ def build_router(allowed_ids: frozenset[int]) -> Router:
                 return
             result = await sp.search_tracks(text)
             remember_tracks(result.get("items") or [])
-            sent = await message.bot.send_rich_message(message.chat.id, rich_message=rich(ui.search_view(emoji, text, result, 0)))
+            sent = await send(message, ui.search_view(emoji, text, result, 0))
             searches[sent.message_id] = text
         except SpotifyError as exc:
-            await message.answer(f"⚠️ <b>Spotify:</b> {exc.message}")
+            await message.answer(t("t.spotify_error", msg=exc.message))
 
     async def send_link_card(message: Message, sp: Spotify, emoji: Emoji, kind: str, item_id: str) -> None:
         if kind == "track":
@@ -182,9 +201,9 @@ def build_router(allowed_ids: frozenset[int]) -> Router:
         else:
             obj = await getattr(sp, kind)(item_id)
             html = ui.context_card(emoji, kind, obj, closable=True)
-        await message.bot.send_rich_message(message.chat.id, rich_message=rich(html))
+        await send(message, html)
 
-    # ---------- кнопки плеера ----------
+    # ---------- player buttons ----------
 
     @router.callback_query(F.data.startswith("p:"))
     async def cb_player(cb: CallbackQuery, sp: Spotify, panel: Panel):
@@ -192,7 +211,7 @@ def build_router(allowed_ids: frozenset[int]) -> Router:
         name = parts[1]
 
         if name == "refresh":
-            await cb.answer("🔄 Обновлено")
+            await cb.answer(t("t.refreshed"))
             await panel.show("player", cb.message)
             return
 
@@ -208,40 +227,40 @@ def build_router(allowed_ids: frozenset[int]) -> Router:
             if name == "toggle":
                 if pb and pb.get("is_playing"):
                     await sp.pause()
-                    toast = "⏸ Пауза"
+                    toast = t("t.paused")
                 else:
                     await sp.play()
-                    toast = "▶️ Играет"
+                    toast = t("t.playing")
             elif name == "next":
                 await sp.next()
-                toast = "⏭ Следующий"
+                toast = t("t.next")
             elif name == "prev":
                 await sp.previous()
-                toast = "⏮ Предыдущий"
+                toast = t("t.prev")
             elif name == "shuffle":
                 state = not (pb or {}).get("shuffle_state")
                 await sp.shuffle(state)
-                toast = "🔀 Перемешивание включено" if state else "🔀 Перемешивание выключено"
+                toast = t("t.shuffle_on") if state else t("t.shuffle_off")
             elif name == "repeat":
                 state = ui.REPEAT_NEXT.get((pb or {}).get("repeat_state", "off"), "off")
                 await sp.repeat(state)
-                toast = {"off": "🔁 Повтор выключен", "context": "🔁 Повтор всего", "track": "🔂 Повтор трека"}[state]
+                toast = t(f"t.repeat_{state}")
             elif name == "vol":
                 current = ((pb or {}).get("device") or {}).get("volume_percent")
                 if current is None:
-                    raise SpotifyError(0, "громкость на этом устройстве не регулируется")
+                    raise SpotifyError(0, t("t.no_volume"))
                 volume = max(0, min(100, current + int(parts[2])))
                 await sp.volume(volume)
-                toast = f"🔊 Громкость {volume}%"
+                toast = t("t.volume", v=volume)
 
         if not await run_action(cb, sp, panel, action):
             return
         await cb.answer(toast)
-        await asyncio.sleep(0.6)  # Spotify применяет команды с задержкой
+        await asyncio.sleep(0.6)  # Spotify applies commands with a delay
         await panel.show(panel.view if panel.view in ("player", "queue") else "player", cb.message)
         panel.refresh_soon()
 
-    # ---------- навигация по панели ----------
+    # ---------- panel navigation ----------
 
     @router.callback_query(F.data.startswith("v:"))
     async def cb_view(cb: CallbackQuery, panel: Panel):
@@ -269,7 +288,7 @@ def build_router(allowed_ids: frozenset[int]) -> Router:
         except SpotifyError as exc:
             await alert(cb, exc)
 
-    # ---------- запуск плейлистов, альбомов, исполнителей ----------
+    # ---------- playing playlists, albums, artists ----------
 
     @router.callback_query(F.data.startswith("c:"))
     async def cb_context(cb: CallbackQuery, sp: Spotify, panel: Panel):
@@ -282,7 +301,7 @@ def build_router(allowed_ids: frozenset[int]) -> Router:
 
         if not await run_action(cb, sp, panel, action):
             return
-        await cb.answer("🔀 Играет вперемешку" if shuffle else "▶️ Поехали!")
+        await cb.answer(t("t.shuffled") if shuffle else t("t.go"))
         await after_play(cb, panel)
 
     @router.callback_query(F.data == "lk")
@@ -292,25 +311,25 @@ def build_router(allowed_ids: frozenset[int]) -> Router:
         except SpotifyError as exc:
             await alert(cb, exc)
             return
-        uris = [t["uri"] for t in tracks if t.get("uri") and not t.get("is_local")]
+        uris = [x["uri"] for x in tracks if x.get("uri") and not x.get("is_local")]
         if not uris:
-            await cb.answer("💚 В любимых пока пусто", show_alert=True)
+            await cb.answer(t("t.liked_empty"), show_alert=True)
             return
         if not await run_action(cb, sp, panel, lambda: sp.play(uris=uris)):
             return
-        await cb.answer("💚 Играют любимые треки")
+        await cb.answer(t("t.liked_playing"))
         await after_play(cb, panel)
 
     async def after_play(cb: CallbackQuery, panel: Panel) -> None:
         await asyncio.sleep(0.8)
-        # Кнопка могла быть на панели или на отдельной карточке из ссылки
+        # The button could be on the panel or on a separate card from a link
         if cb.message.message_id == panel.message_id:
             await panel.show("player", cb.message)
         elif panel.message_id:
             await panel.show("player")
         panel.refresh_soon()
 
-    # ---------- устройства ----------
+    # ---------- devices ----------
 
     @router.callback_query(F.data.startswith("dev:"))
     async def cb_device(cb: CallbackQuery, sp: Spotify, panel: Panel):
@@ -319,12 +338,12 @@ def build_router(allowed_ids: frozenset[int]) -> Router:
         except SpotifyError as exc:
             await alert(cb, exc)
             return
-        await cb.answer("📱 Переключаю устройство")
+        await cb.answer(t("t.switching"))
         await asyncio.sleep(1.2)
         await panel.show("player", cb.message)
         panel.refresh_soon()
 
-    # ---------- поиск и треки ----------
+    # ---------- search and tracks ----------
 
     @router.callback_query(F.data.startswith("s:"))
     async def cb_search(cb: CallbackQuery, sp: Spotify, emoji: Emoji):
@@ -339,7 +358,7 @@ def build_router(allowed_ids: frozenset[int]) -> Router:
             return
         query = searches.get(cb.message.message_id)
         if not query:
-            await cb.answer("⌛ Поиск устарел, отправь запрос ещё раз", show_alert=True)
+            await cb.answer(t("t.search_expired"), show_alert=True)
             return
         offset = int(parts[2])
         try:
@@ -355,12 +374,12 @@ def build_router(allowed_ids: frozenset[int]) -> Router:
     async def cb_track(cb: CallbackQuery, sp: Spotify, panel: Panel):
         _, mode, track_id = cb.data.split(":", 2)
         uri = f"spotify:track:{track_id}"
-        name = track_names.get(track_id, "трек")
+        name = track_names.get(track_id, t("t.track"))
 
         if mode == "add":
             if not await run_action(cb, sp, panel, lambda: sp.add_to_queue(uri)):
                 return
-            await cb.answer(f"✅ В очереди: {name}"[:200])
+            await cb.answer(t("t.queued", name=name)[:200])
             if panel.view == "queue":
                 await asyncio.sleep(0.6)
                 await panel.show("queue")
@@ -373,19 +392,37 @@ def build_router(allowed_ids: frozenset[int]) -> Router:
                 await panel.show("player")
             panel.refresh_soon()
 
-    # ---------- настройка эмодзи ----------
+    # ---------- emoji settings ----------
 
     @router.callback_query(F.data.startswith("em:"))
     async def cb_emoji(cb: CallbackQuery, emoji: Emoji, panel: Panel):
         _, action, key = cb.data.split(":", 2)
         if action == "set":
             emoji_waiting[cb.message.chat.id] = key
-            await cb.answer(f"Пришли эмодзи для «{LABELS.get(key, key)}»")
-            await cb.message.edit_text(rich_message=rich(ui.emoji_view(emoji, LABELS, waiting=key)))
+            await cb.answer(t("emoji.send_for", label=t("label." + key)))
+            await cb.message.edit_text(rich_message=rich(ui.emoji_view(emoji, KEYS, waiting=key)))
             return
         emoji.reset_override(None if key == "*" else key)
-        await cb.answer("Сброшено")
-        await cb.message.edit_text(rich_message=rich(ui.emoji_view(emoji, LABELS)))
+        await cb.answer(t("emoji.reset_done"))
+        await cb.message.edit_text(rich_message=rich(ui.emoji_view(emoji, KEYS)))
+        await panel.redraw()
+
+    # ---------- language ----------
+
+    @router.callback_query(F.data.startswith("lang:"))
+    async def cb_language(cb: CallbackQuery, bot: Bot, emoji: Emoji, panel: Panel):
+        code = cb.data.split(":", 1)[1]
+        if code not in LANGUAGES:
+            await cb.answer()
+            return
+        set_lang(code)
+        save_settings({"LANGUAGE": code})
+        await cb.answer(t("lang.set"))
+        try:
+            await cb.message.edit_text(rich_message=rich(ui.language_view(emoji)))
+        except TelegramBadRequest:
+            pass
+        await set_commands(bot)
         await panel.redraw()
 
     @router.callback_query(F.data == "noop")

@@ -1,8 +1,8 @@
-"""Генерирует иконку приложения и логотип для README.
+"""Generates the app icon and the README logo.
 
     python tools/make_assets.py
 
-Нужен Pillow (ставится в build.bat).
+Requires Pillow (installed by build.bat).
 """
 
 from pathlib import Path
@@ -15,7 +15,7 @@ DARK = (18, 18, 18)
 
 
 def vinyl(size: int) -> Image.Image:
-    s = size * 4  # рисуем крупно и уменьшаем — так края гладкие
+    s = size * 4  # draw large and downscale for smooth edges
     img = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     c = s / 2
@@ -28,7 +28,7 @@ def vinyl(size: int) -> Image.Image:
     d.arc((c - r * 0.8, c - r * 0.8, c + r * 0.8, c + r * 0.8), 20, 65, fill=(255, 255, 255, 110), width=s // 40)
     lr = r * 0.36
     d.ellipse((c - lr, c - lr, c + lr, c + lr), fill=GREEN)
-    # «Play» на этикетке
+    # "Play" on the label
     t = lr * 0.55
     d.polygon([(c - t * 0.45, c - t * 0.6), (c - t * 0.45, c + t * 0.6), (c + t * 0.6, c)], fill=DARK)
     return img.resize((size, size), Image.LANCZOS)
@@ -39,7 +39,7 @@ def main() -> None:
     assets.mkdir(exist_ok=True)
     vinyl(256).save(assets / "icon.ico", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
     vinyl(512).save(assets / "logo.png")
-    print("Готово: assets/icon.ico, assets/logo.png")
+    print("Done: assets/icon.ico, assets/logo.png")
 
 
 if __name__ == "__main__":

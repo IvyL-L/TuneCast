@@ -1,8 +1,8 @@
-"""Анимированные эмодзи TuneCast, нарисованные кодом в формате Lottie (TGS).
+"""TuneCast animated emoji, drawn in code as Lottie (TGS).
 
-Требования Telegram: холст 512×512, 60 кадров/с, до 3 секунд, зацикленность,
-без масок, выражений, текстов и картинок. Каждая иконка — функция, которая
-возвращает список слоёв.
+Telegram requirements: 512×512 canvas, 60 fps, up to 3 seconds, looped,
+no masks, expressions, texts or images. Each icon is a function that
+returns a list of layers.
 """
 
 import gzip
@@ -10,8 +10,8 @@ import json
 import math
 
 FPS = 60
-FRAMES = 180  # 3 секунды
-C = 256  # центр холста
+FRAMES = 180  # 3 seconds
+C = 256  # canvas center
 
 WHITE = [1, 1, 1, 1]
 GREEN = [0.118, 0.843, 0.376, 1]
@@ -20,7 +20,7 @@ GREY = [0.32, 0.32, 0.32, 1]
 RED = [1, 0.36, 0.42, 1]
 
 
-# ---------- примитивы Lottie ----------
+# ---------- Lottie primitives ----------
 
 
 def _static(value):
@@ -32,7 +32,7 @@ def _ease(dims: int):
 
 
 def anim(*keys):
-    """anim((кадр, значение), ...) — плавная анимация свойства."""
+    """anim((frame, value), ...) — eased property animation."""
     frames = []
     for n, (t, value) in enumerate(keys):
         value = value if isinstance(value, list) else [value]
@@ -74,7 +74,7 @@ def transform(p=(0, 0), a=(0, 0), s=(100, 100), r=0, o=100):
 
 
 def _bottom_up(items):
-    # В Lottie первый элемент рисуется сверху; пишем иконки «снизу вверх» и разворачиваем
+    # In Lottie the first item is drawn on top; icons are written bottom-up and reversed here
     if items and all(item.get("ty") == "gr" for item in items):
         return list(reversed(items))
     return list(items)
@@ -115,7 +115,7 @@ def path(points, closed=True, ins=None, outs=None):
 
 
 def arc(cx, cy, radius, a0, a1):
-    """Дуга окружности (углы в градусах, 0 — вправо, по часовой) кривыми Безье."""
+    """Circular arc as Bezier curves (degrees, 0 = right, clockwise)."""
     steps = max(1, math.ceil(abs(a1 - a0) / 90))
     angles = [math.radians(a0 + (a1 - a0) * i / steps) for i in range(steps + 1)]
     delta = (angles[1] - angles[0]) if steps else 0
@@ -163,11 +163,11 @@ def layer(*shapes, index=1, **tr):
     }
 
 
-# ---------- выравнивание: настоящие границы рисунка ----------
+# ---------- alignment: real artwork bounds ----------
 
 
 def _at0(prop):
-    """Значение свойства в первом кадре."""
+    """Property value at the first frame."""
     return prop["k"] if prop["a"] == 0 else prop["k"][0]["s"]
 
 
@@ -236,25 +236,25 @@ def bounds(layers):
 
 
 def fit(layers, size: float, nudge=(0, 0)):
-    """Сдвинуть и масштабировать рисунок: центр границ — в центр холста, больший размер — size."""
+    """Move and scale the artwork: bounds center to canvas center, larger side to size."""
     x0, y0, x1, y1 = bounds(layers)
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     k = size / max(x1 - x0, y1 - y0)
     for lay in layers:
-        # Все слои TuneCast статичны на уровне слоя, поэтому трансформацию можно заменить
+        # All TuneCast layers are static at layer level, so the transform can be replaced
         lay["ks"]["a"] = _static([cx, cy, 0])
         lay["ks"]["p"] = _static([C + nudge[0], C + nudge[1], 0])
         lay["ks"]["s"] = _static([k * 100, k * 100, 100])
     return layers
 
 
-ICON_SIZE = 330  # из 512: остаётся запас на «дыхание» анимаций
+ICON_SIZE = 330  # of 512: leaves room for the animations to breathe
 ART_SIZE = 380
-# Вертикальный сдвиг рисунка. Под официальные клиенты Telegram он не нужен.
-# (Unigram рисует custom emoji ниже центра, ему помогало значение -40.)
+# Vertical artwork offset. Not needed for the official Telegram apps.
+# (Unigram draws custom emoji below center; -40 helped there.)
 LIFT = 0
-NUDGE = {"play": (10, 0)}  # треугольник оптически центрируется чуть правее
-SIZE = {"live": 150}  # у «эфира» расходящееся кольцо, ему нужен запас по краям
+NUDGE = {"play": (10, 0)}  # a triangle looks centered when shifted slightly right
+SIZE = {"live": 150}  # the expanding ring needs room at the edges
 
 
 def document(name: str, layers: list, size: float = ICON_SIZE) -> dict:
@@ -283,17 +283,17 @@ def tgs(doc: dict) -> bytes:
 
 
 def pulse(peak=112, at=0, length=80):
-    """Мягкое «дыхание» масштаба, затем пауза до конца цикла."""
+    """A soft scale breath, then a pause until the loop ends."""
     half = length // 2
     return anim((at, [100, 100]), (at + half, [peak, peak]), (at + length, [100, 100]), (FRAMES, [100, 100]))
 
 
 def solid(color, outline=36):
-    """Заливка + обводка того же цвета: так углы получаются скруглёнными."""
+    """Fill + stroke of the same color: gives rounded corners."""
     return [fill(color), stroke(color, outline)]
 
 
-# ---------- иконки (белые, перекрашиваются под цвет текста) ----------
+# ---------- icons (white, repainted to the text color) ----------
 
 
 def icon_play(color=WHITE):
@@ -311,7 +311,7 @@ def icon_pause(color=WHITE):
 
 
 def _skip(direction: int, color):
-    # direction 1 — вперёд, -1 — назад
+    # direction 1 = forward, -1 = back
     def fx(x):
         return C + (x - C) * direction
 
@@ -421,7 +421,7 @@ def icon_devices(color=WHITE):
 
 
 def _head_at(angle_deg, radius, size=46, color=WHITE):
-    """Наконечник стрелки в конце дуги, направленный по ходу дуги."""
+    """Arrowhead at the end of an arc, pointing along it."""
     a = math.radians(angle_deg)
     x, y = C + radius * math.cos(a), C + radius * math.sin(a)
     dx, dy = -math.sin(a), math.cos(a)
@@ -514,7 +514,7 @@ def icon_clock(color=WHITE):
     return [layer(face, hand_h, hand_m)]
 
 
-# ---------- акценты (цветные, не перекрашиваются) ----------
+# ---------- accents (colored, not repainted) ----------
 
 
 def art_equalizer():
@@ -585,7 +585,7 @@ def art_sad():
     return [layer(face, *eyes, mouth, zz)]
 
 
-# ключ: (функция, запасной обычный эмодзи)
+# key: (function, regular fallback emoji)
 ICONS = {
     "play": (icon_play, "▶️"),
     "pause": (icon_pause, "⏸"),
@@ -625,7 +625,7 @@ ART = {
 
 
 def build_all() -> dict[str, dict[str, dict]]:
-    """{'icons': {ключ: lottie}, 'art': {ключ: lottie}}"""
+    """{'icons': {key: lottie}, 'art': {key: lottie}}"""
     return {
         "icons": {key: document(key, fn()) for key, (fn, _) in ICONS.items()},
         "art": {key: document(key, fn(), ART_SIZE) for key, (fn, _) in ART.items()},

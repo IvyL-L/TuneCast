@@ -1,4 +1,4 @@
-"""Панель плеера: одно Rich Message, которое бот редактирует на месте."""
+"""The player panel: a single Rich Message the bot edits in place."""
 
 import asyncio
 import logging
@@ -11,6 +11,7 @@ from aiogram.types import InputRichMessage, Message
 
 from . import ui
 from .emoji import Emoji
+from .i18n import t
 from .spotify import Spotify, SpotifyError
 from .storage import Store
 
@@ -53,10 +54,10 @@ class Panel:
         self._wake = asyncio.Event()
         self._context_names: dict[str, str | None] = {}
 
-    # ---------- публичное ----------
+    # ---------- public ----------
 
     async def send_new(self, chat_id: int, view: str = "player", **kwargs) -> None:
-        """Отправить свежую панель вниз чата, старую удалить."""
+        """Send a fresh panel to the bottom of the chat and delete the old one."""
         async with self._lock:
             old = (self.chat_id, self.message_id)
             self.view = view
@@ -72,9 +73,9 @@ class Panel:
                 pass
 
     async def show(self, view: str, message: Message | None = None, **kwargs) -> None:
-        """Перерисовать панель в другом режиме (плеер, очередь, плейлисты…)."""
+        """Redraw the panel in another view (player, queue, playlists…)."""
         if message is not None and (message.chat.id, message.message_id) != (self.chat_id, self.message_id):
-            # Нажали кнопку на старой панели: делаем её текущей
+            # A button on an older panel was pressed: make it the current one
             self.chat_id, self.message_id = message.chat.id, message.message_id
             self.store.set(panel_chat_id=self.chat_id, panel_message_id=self.message_id)
             self._html = None
@@ -84,7 +85,7 @@ class Panel:
             self.view = view
             html = await self._build(view, **kwargs)
             if not await self._edit(html):
-                # Старую панель (например, фото из прошлой версии) отредактировать нельзя
+                # An old panel (e.g. a photo from an earlier version) can't be edited
                 chat_id, old_id = self.chat_id, self.message_id
                 msg = await self.bot.send_rich_message(chat_id, rich_message=rich(html))
                 self.message_id = msg.message_id
@@ -96,12 +97,12 @@ class Panel:
                     pass
 
     async def redraw(self) -> None:
-        """Перерисовать текущий экран (например, после смены эмодзи)."""
+        """Redraw the current screen (e.g. after changing emoji or language)."""
         if self.message_id:
             await self.show(self.view)
 
     def refresh_soon(self, delay: float = 1.5) -> None:
-        """Попросить фоновый цикл проверить Spotify пораньше (состояние обновляется с задержкой)."""
+        """Ask the background loop to check Spotify sooner (its state updates with a delay)."""
 
         async def wake():
             await asyncio.sleep(delay)
@@ -110,7 +111,7 @@ class Panel:
         asyncio.create_task(wake())
 
     async def run(self) -> None:
-        """Фоновый цикл: следит за Spotify, обновляет панель и профиль."""
+        """Background loop: watches Spotify, updates the panel and the profile."""
         while True:
             try:
                 pb = await self.sp.playback()
@@ -119,14 +120,14 @@ class Panel:
             except SpotifyError as exc:
                 log.warning("Spotify: %s", exc)
             except Exception:
-                log.exception("Ошибка в фоновом цикле")
+                log.exception("Error in the background loop")
             try:
                 await asyncio.wait_for(self._wake.wait(), timeout=self.poll_interval)
             except TimeoutError:
                 pass
             self._wake.clear()
 
-    # ---------- внутреннее ----------
+    # ---------- internals ----------
 
     def _set_playback(self, pb: dict | None) -> None:
         self.pb = pb
@@ -134,7 +135,7 @@ class Panel:
             try:
                 self.on_playback(pb)
             except Exception:
-                log.exception("Ошибка обработчика профиля")
+                log.exception("Profile handler error")
 
     async def _auto_update(self, pb: dict | None) -> None:
         if not self.message_id or self.view != "player" or self._lock.locked():
@@ -176,7 +177,7 @@ class Panel:
         self._last_edit = time.monotonic()
 
     async def _edit(self, html: str) -> bool:
-        """True — панель на месте (изменена или не требовала изменений)."""
+        """True if the panel is in place (edited or already up to date)."""
         if html == self._html:
             return True
         try:
@@ -191,7 +192,7 @@ class Panel:
                 self._remember(html)
                 return True
             if "not found" in text or "can't be edited" in text or "message to edit" in text:
-                log.info("Панель недоступна для редактирования (%s)", exc.message)
+                log.info("The panel can't be edited (%s)", exc.message)
                 return False
             if "there is no text in the message" in text or "rich" in text:
                 return False
@@ -203,9 +204,9 @@ class Panel:
         if not uri:
             return None
         if kind == "collection" or uri.endswith(":collection"):
-            return "Любимые треки"
+            return t("liked_songs")
         if kind == "album":
-            return None  # альбом уже показан под названием
+            return None  # the album is already shown under the title
         if uri in self._context_names:
             return self._context_names[uri]
         label = None

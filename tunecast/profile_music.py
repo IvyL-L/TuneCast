@@ -1,8 +1,8 @@
-"""Трансляция текущего трека в «Музыку профиля» Telegram.
+"""Shows the current track in the Telegram profile's music section.
 
-Spotify не отдаёт сами аудиофайлы, поэтому в профиль загружается беззвучный MP3
-нужной длины с названием, исполнителем и обложкой текущего трека. Плашка
-«♪ Трек — Исполнитель» в профиле показывает именно его.
+Spotify doesn't provide audio files, so a silent MP3 of the right length with
+the current title, artist and cover is uploaded to the profile. The
+"♪ Track — Artist" bar in the profile shows exactly that.
 """
 
 import asyncio
@@ -15,12 +15,13 @@ from telethon import TelegramClient, errors
 from telethon.tl import functions, types
 
 from . import ui
+from .i18n import t
 from .audio import silent_mp3
 from .storage import Store
 
 log = logging.getLogger(__name__)
 
-DEBOUNCE = 3  # не дёргаем Telegram, если треки листают быстро
+DEBOUNCE = 3  # don't spam Telegram while tracks are skipped quickly
 
 
 @dataclass(frozen=True)
@@ -51,13 +52,13 @@ class ProfileMusic:
     async def start(self) -> bool:
         await self.client.connect()
         if not await self.client.is_user_authorized():
-            log.warning("Профиль: аккаунт Telegram не подключён. Запусти TuneCast.exe --setup и пройди шаг «Трек в профиле».")
+            log.warning("Profile: Telegram account not connected. Run TuneCast.exe --setup and complete the profile track step.")
             await self.client.disconnect()
             return False
         me = await self.client.get_me()
-        log.info("Профиль: подключён аккаунт %s", me.first_name)
+        log.info("Profile: connected as %s", me.first_name)
 
-        # Если прошлый запуск завершился аварийно, убираем оставшийся трек
+        # If the last run crashed, remove the leftover track
         leftover = self.store.get("profile_doc")
         if leftover:
             await self._unsave(self._load_doc(leftover))
@@ -80,14 +81,14 @@ class ProfileMusic:
             await self.client.disconnect()
 
     def update(self, pb: dict | None) -> None:
-        """Вызывается фоновым циклом панели при каждом опросе Spotify."""
+        """Called by the panel's background loop on every Spotify poll."""
         item = (pb or {}).get("item")
         if pb and pb.get("is_playing") and item and item.get("id"):
             self._idle_since = None
             if self._desired is None or self._desired.id != item["id"]:
                 self._desired = Track(
                     id=item["id"],
-                    title=item.get("name") or "Без названия",
+                    title=item.get("name") or t("untitled"),
                     performer=ui.artists(item),
                     duration=max(1, (item.get("duration_ms") or 0) // 1000),
                     cover=ui.item_image(item, small=True),
@@ -102,7 +103,7 @@ class ProfileMusic:
             self._desired = None
             self._event.set()
 
-    # ---------- внутреннее ----------
+    # ---------- internals ----------
 
     async def _worker(self) -> None:
         while True:
@@ -115,11 +116,11 @@ class ProfileMusic:
             try:
                 await self._apply(target)
             except errors.FloodWaitError as exc:
-                log.warning("Профиль: Telegram просит подождать %s с", exc.seconds)
+                log.warning("Profile: Telegram asks to wait %s s", exc.seconds)
                 await asyncio.sleep(exc.seconds + 1)
                 self._event.set()
             except Exception:
-                log.exception("Профиль: не удалось обновить трек")
+                log.exception("Profile: could not update the track")
                 await asyncio.sleep(10)
 
     async def _apply(self, target: Track | None) -> None:
@@ -129,7 +130,7 @@ class ProfileMusic:
                 await self._delete_saved_message()
             self._current = self._current_doc = None
             self.store.set(profile_doc=None)
-            log.info("Профиль: трек убран (музыка на паузе)")
+            log.info("Profile: track removed (music paused)")
             return
 
         old_doc, old_msg = self._current_doc, self.store.get("profile_message_id")
@@ -139,8 +140,8 @@ class ProfileMusic:
         except errors.RPCError as exc:
             if "DOCUMENT_INVALID" not in str(exc) or self._use_saved_messages:
                 raise
-            # Запасной путь: файл через «Избранное»
-            log.info("Профиль: переключаюсь на загрузку через «Избранное»")
+            # Fallback: upload the file via Saved Messages
+            log.info("Profile: switching to uploads via Saved Messages")
             self._use_saved_messages = True
             self.store.set(profile_use_saved_messages=True)
             doc, msg_id = await self._upload(target)
@@ -152,7 +153,7 @@ class ProfileMusic:
             await self._unsave(old_doc)
         if old_msg and old_msg != msg_id:
             await self._delete_messages([old_msg])
-        log.info("Профиль: ♪ %s — %s", target.title, target.performer)
+        log.info("Profile: ♪ %s — %s", target.title, target.performer)
 
     async def _upload(self, track: Track) -> tuple[types.InputDocument, int | None]:
         audio = await self.client.upload_file(
@@ -165,7 +166,7 @@ class ProfileMusic:
                 resp.raise_for_status()
                 thumb = await self.client.upload_file(resp.content, file_name="cover.jpg")
             except Exception as exc:
-                log.debug("Профиль: обложка не загрузилась: %s", exc)
+                log.debug("Profile: cover download failed: %s", exc)
 
         attributes = [
             types.DocumentAttributeAudio(duration=track.duration, title=track.title, performer=track.performer),
@@ -190,7 +191,7 @@ class ProfileMusic:
         try:
             await self.client(functions.account.SaveMusicRequest(id=doc, unsave=True))
         except errors.RPCError as exc:
-            log.debug("Профиль: не удалось убрать старый трек: %s", exc)
+            log.debug("Profile: could not remove the old track: %s", exc)
 
     async def _delete_saved_message(self) -> None:
         msg_id = self.store.get("profile_message_id")
@@ -202,7 +203,7 @@ class ProfileMusic:
         try:
             await self.client.delete_messages("me", ids)
         except errors.RPCError as exc:
-            log.debug("Профиль: не удалось удалить сообщение: %s", exc)
+            log.debug("Profile: could not delete the message: %s", exc)
 
     @staticmethod
     def _dump_doc(doc: types.InputDocument) -> dict:

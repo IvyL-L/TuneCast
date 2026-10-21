@@ -4,7 +4,7 @@ from typing import Any
 
 
 class Store:
-    """Маленькое JSON-хранилище для состояния между перезапусками."""
+    """A tiny JSON store for state that survives restarts."""
 
     def __init__(self, path: Path):
         self.path = path

@@ -1,9 +1,9 @@
-"""Свои анимированные эмодзи: создание паков ботом, замена своими, режим без Premium.
+"""Animated emoji: packs created by the bot, custom replacements, non-Premium mode.
 
-Custom emoji в сообщениях бота видны всем, но ставить их бот может, только
-если у владельца бота есть Telegram Premium. Поэтому:
-  • Premium есть → эмодзи из паков TuneCast (или те, что пользователь выбрал сам);
-  • Premium нет → обычные эмодзи.
+Custom emoji in bot messages are visible to everyone, but a bot may only use
+them if its owner has Telegram Premium. So:
+  • Premium → emoji from the TuneCast packs (or the ones the user picked);
+  • no Premium → regular emoji.
 """
 
 import hashlib
@@ -16,48 +16,18 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import BufferedInputFile, InputSticker
 
 from . import emoji_art
+from .i18n import t
 from .storage import Store
 
 log = logging.getLogger(__name__)
 
 PACKS = {
-    "icons": {"title": "TuneCast · иконки", "repaint": True},
-    "art": {"title": "TuneCast · акценты", "repaint": False},
+    "icons": {"title": "pack.icons", "repaint": True},
+    "art": {"title": "pack.art", "repaint": False},
 }
 
-LABELS = {
-    "play": "Играть",
-    "pause": "Пауза",
-    "next": "Следующий",
-    "prev": "Предыдущий",
-    "shuffle": "Перемешать",
-    "repeat": "Повтор",
-    "repeat_one": "Повтор трека",
-    "vol_down": "Тише",
-    "vol_up": "Громче",
-    "queue": "Очередь",
-    "library": "Плейлисты",
-    "devices": "Устройства",
-    "refresh": "Обновить",
-    "search": "Поиск",
-    "plus": "В очередь",
-    "close": "Закрыть",
-    "back": "Назад",
-    "computer": "Компьютер",
-    "phone": "Телефон",
-    "speaker": "Колонка",
-    "music": "Трек",
-    "heart_outline": "Сердце (контур)",
-    "disc": "Альбом",
-    "clock": "Длительность",
-    "equalizer": "Играет",
-    "equalizer_paused": "На паузе",
-    "vinyl": "Винил",
-    "heart": "Любимые",
-    "note": "Нота",
-    "live": "В эфире",
-    "sleep": "Ничего не играет",
-}
+# Order of icons in /emoji
+KEYS = list(emoji_art.FALLBACK)
 
 
 class Emoji:
@@ -67,7 +37,7 @@ class Emoji:
         self.overrides: dict[str, dict] = store.get("emoji_overrides", {})
         self.premium: bool = bool(store.get("owner_premium", False))
 
-    # ---------- использование в тексте ----------
+    # ---------- use in text ----------
 
     def char(self, key: str) -> str:
         override = self.overrides.get(key) or {}
@@ -76,12 +46,12 @@ class Emoji:
     def custom_id(self, key: str) -> str | None:
         if not self.premium:
             return None
-        if key in self.overrides:  # заменённый обычным эмодзи остаётся обычным
+        if key in self.overrides:  # replaced with a regular emoji → stays regular
             return self.overrides[key].get("id")
         return self.ids.get(key)
 
     def __call__(self, key: str) -> str:
-        """HTML-фрагмент для Rich Message: анимированный эмодзи или обычный."""
+        """HTML fragment for a Rich Message: animated emoji or a regular one."""
         cid = self.custom_id(key)
         char = escape(self.char(key))
         return f'<tg-emoji emoji-id="{cid}">{char}</tg-emoji>' if cid else char
@@ -89,16 +59,16 @@ class Emoji:
     # ---------- Premium ----------
 
     def set_premium(self, value: bool | None) -> bool:
-        """Вернёт True, если статус изменился (панель стоит перерисовать)."""
+        """Returns True if the status changed (the panel should be redrawn)."""
         value = bool(value)
         if value == self.premium:
             return False
         self.premium = value
         self.store.set(owner_premium=value)
-        log.info("Эмодзи: Premium %s → %s", "есть" if value else "нет", "анимированные" if value else "обычные")
+        log.info("Emoji: Telegram Premium %s → %s emoji", "on" if value else "off", "animated" if value else "regular")
         return True
 
-    # ---------- замена своими ----------
+    # ---------- custom replacements ----------
 
     def set_override(self, key: str, custom_id: str | None, char: str | None) -> None:
         self.overrides[key] = {"id": custom_id, "char": char}
@@ -111,10 +81,10 @@ class Emoji:
             self.overrides.pop(key, None)
         self.store.set(emoji_overrides=self.overrides)
 
-    # ---------- паки ----------
+    # ---------- packs ----------
 
     async def sync_packs(self, bot: Bot, owner_id: int) -> None:
-        """Создать паки TuneCast (или пересоздать, если рисунки поменялись)."""
+        """Create the TuneCast packs (or recreate them if the artwork changed)."""
         me = await bot.get_me()
         art = emoji_art.build_all()
         packs_state: dict = self.store.get("emoji_packs", {})
@@ -129,7 +99,7 @@ class Emoji:
             current = packs_state.get(pack, {})
 
             if current.get("name") == name and all(key in ids for key in files):
-                continue  # пак актуален
+                continue  # pack is up to date
 
             stickers = await self._ensure_set(bot, owner_id, name, pack, files)
             for key, sticker in zip(files, stickers):
@@ -138,7 +108,7 @@ class Emoji:
             packs_state[pack] = {"name": name}
             self.ids = ids
             self.store.set(emoji_ids=ids, emoji_packs=packs_state)
-            log.info("Эмодзи: пак «%s» готов: t.me/addemoji/%s", PACKS[pack]["title"], name)
+            log.info("Emoji: pack ready: t.me/addemoji/%s", name)
             if old and old != name:
                 try:
                     await bot.delete_sticker_set(old)
@@ -146,12 +116,11 @@ class Emoji:
                     pass
 
     async def _ensure_set(self, bot: Bot, owner_id: int, name: str, pack: str, files: dict[str, bytes]):
-        """Создаёт пак с одной иконкой и докладывает остальные по одной.
+        """Create the pack with one icon, then add the rest one by one.
 
-        Telegram строго ограничивает частоту таких запросов. Если он попросит
-        подождать, TelegramRetryAfter уйдёт наверх, а при повторе работа
-        продолжится с того места, где остановилась: уже добавленные иконки
-        лежат в паке по порядку.
+        Telegram rate-limits these calls strictly. If it asks to wait,
+        TelegramRetryAfter propagates up, and the next attempt continues where
+        this one stopped: icons already added stay in the pack in order.
         """
         keys = list(files)
 
@@ -169,7 +138,7 @@ class Emoji:
             await bot.create_new_sticker_set(
                 user_id=owner_id,
                 name=name,
-                title=PACKS[pack]["title"],
+                title=t(PACKS[pack]["title"]),
                 stickers=[sticker(keys[0])],
                 sticker_type="custom_emoji",
                 needs_repainting=PACKS[pack]["repaint"],
@@ -178,7 +147,5 @@ class Emoji:
 
         for n, key in enumerate(keys[count:], count + 1):
             await bot.add_sticker_to_set(user_id=owner_id, name=name, sticker=sticker(key))
-            log.info("Эмодзи: %s %d/%d", pack, n, len(keys))
+            log.info("Emoji: %s %d/%d", pack, n, len(keys))
         return (await bot.get_sticker_set(name)).stickers
-
-

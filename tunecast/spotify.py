@@ -1,4 +1,4 @@
-"""Тонкий асинхронный клиент Spotify Web API (с учётом изменений февраля 2026)."""
+"""A thin async Spotify Web API client (accounts for the February 2026 changes)."""
 
 import asyncio
 import base64
@@ -13,6 +13,8 @@ from urllib.parse import urlencode, urlparse
 
 import httpx
 from aiohttp import web
+
+from .i18n import t
 
 log = logging.getLogger(__name__)
 
@@ -30,10 +32,13 @@ SCOPES = " ".join(
     ]
 )
 
-DONE_HTML = """<!doctype html><meta charset="utf-8"><title>Готово</title>
-<body style="font-family:system-ui;background:#121212;color:#fff;display:grid;place-items:center;height:100vh;margin:0">
-<div style="text-align:center"><div style="font-size:64px">🎧</div><h2>Spotify подключён</h2>
-<p style="color:#b3b3b3">Вкладку можно закрыть и вернуться в Telegram.</p></div></body>"""
+def done_html() -> str:
+    return (
+        '<!doctype html><meta charset="utf-8"><title>TuneCast</title>'
+        '<body style="font-family:system-ui;background:#121212;color:#fff;display:grid;place-items:center;height:100vh;margin:0">'
+        f'<div style="text-align:center"><div style="font-size:64px">🎧</div><h2>{t("login.page_title")}</h2>'
+        f'<p style="color:#b3b3b3">{t("login.page_text")}</p></div></body>'
+    )
 
 
 class SpotifyError(Exception):
@@ -65,7 +70,7 @@ class Spotify:
     async def close(self) -> None:
         await self._http.aclose()
 
-    # ---------- авторизация ----------
+    # ---------- sign-in ----------
 
     async def ensure_auth(self) -> None:
         if self.token_path.exists():
@@ -73,8 +78,8 @@ class Spotify:
                 self._token = json.loads(self.token_path.read_text("utf-8"))
                 await self._access_token()
                 return
-            except Exception as exc:  # токен испорчен или отозван
-                log.warning("Не удалось обновить токен Spotify (%s), нужен повторный вход", exc)
+            except Exception as exc:  # the token is broken or revoked
+                log.warning("Could not refresh the Spotify token (%s), signing in again", exc)
         await self._authorize()
 
     async def _authorize(self) -> None:
@@ -85,14 +90,14 @@ class Spotify:
 
         async def callback(request: web.Request) -> web.Response:
             if request.query.get("state") != state:
-                return web.Response(text="Неверный state", status=400)
+                return web.Response(text="Invalid state", status=400)
             if "error" in request.query:
                 if not result.done():
-                    result.set_exception(RuntimeError(f"Spotify отклонил вход: {request.query['error']}"))
-                return web.Response(text="Вход отклонён", status=400)
+                    result.set_exception(RuntimeError(f"Spotify declined the sign-in: {request.query['error']}"))
+                return web.Response(text=t("login.denied"), status=400)
             if not result.done():
                 result.set_result(request.query["code"])
-            return web.Response(text=DONE_HTML, content_type="text/html")
+            return web.Response(text=done_html(), content_type="text/html")
 
         app = web.Application()
         app.router.add_get(path, callback)
@@ -109,7 +114,7 @@ class Spotify:
                 "state": state,
             }
         )
-        print("\n🎧 Войди в Spotify по ссылке (она должна открыться сама):\n" + auth_url + "\n", flush=True)
+        print("\n" + t("login.open") + "\n" + auth_url + "\n", flush=True)
         webbrowser.open(auth_url)
         try:
             code = await result
@@ -119,7 +124,7 @@ class Spotify:
         await self._fetch_token(
             {"grant_type": "authorization_code", "code": code, "redirect_uri": self.redirect_uri}
         )
-        log.info("Spotify: вход выполнен")
+        log.info("Spotify: signed in")
 
     async def _fetch_token(self, data: dict[str, str]) -> None:
         basic = base64.b64encode(f"{self.client_id}:{self.client_secret}".encode()).decode()
@@ -135,7 +140,7 @@ class Spotify:
         self.token_path.write_text(json.dumps(token), "utf-8")
 
     async def _access_token(self, force: bool = False) -> str:
-        assert self._token is not None, "сначала вызови ensure_auth()"
+        assert self._token is not None, "call ensure_auth() first"
         async with self._refresh_lock:
             if force or time.time() >= self._token.get("expires_at", 0):
                 await self._fetch_token(
@@ -143,7 +148,7 @@ class Spotify:
                 )
             return self._token["access_token"]
 
-    # ---------- запросы ----------
+    # ---------- requests ----------
 
     async def _req(
         self, method: str, path: str, *, params: dict | None = None, body: Any = None, _retry: int = 2
@@ -153,11 +158,11 @@ class Spotify:
         if body is not None:
             kwargs["json"] = body
         elif method != "GET":
-            kwargs["content"] = b""  # Spotify требует Content-Length даже без тела
+            kwargs["content"] = b""  # Spotify requires Content-Length even without a body
         try:
             resp = await self._http.request(method, API + path, **kwargs)
         except httpx.TransportError as exc:
-            raise SpotifyError(0, f"нет связи со Spotify ({exc.__class__.__name__})") from exc
+            raise SpotifyError(0, f"no connection to Spotify ({exc.__class__.__name__})") from exc
 
         if resp.status_code == 401 and _retry:
             await self._access_token(force=True)
@@ -190,7 +195,7 @@ class Spotify:
             return PremiumRequired(resp.status_code, message, reason)
         return SpotifyError(resp.status_code, message, reason)
 
-    # ---------- данные ----------
+    # ---------- data ----------
 
     async def me(self) -> dict:
         return await self._req("GET", "/me")
@@ -206,7 +211,7 @@ class Spotify:
         return await self._req("GET", "/me/player/queue") or {}
 
     async def search_tracks(self, query: str, offset: int = 0, limit: int = 10) -> dict:
-        # С 2026 года limit для dev-приложений не больше 10
+        # Since 2026, limit is at most 10 for development-mode apps
         data = await self._req(
             "GET", "/search", params={"q": query, "type": "track", "limit": limit, "offset": offset}
         )
@@ -231,7 +236,7 @@ class Spotify:
         data = await self._req("GET", "/me/tracks", params={"limit": limit})
         return [entry["track"] for entry in (data or {}).get("items", []) if entry.get("track")]
 
-    # ---------- управление ----------
+    # ---------- playback control ----------
 
     async def play(
         self,

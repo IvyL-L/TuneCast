@@ -1,7 +1,7 @@
-"""Настройки TuneCast.
+"""TuneCast settings.
 
-Все ключи и файлы входа лежат только на твоём компьютере, в папке data рядом
-с TuneCast.exe (или рядом с исходниками, если запускаешь из Python).
+All keys and sign-in files live only on your computer, in the data folder next
+to TuneCast.exe (or next to the sources when running from Python).
 """
 
 import os
@@ -11,7 +11,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-if getattr(sys, "frozen", False):  # собранный TuneCast.exe
+from .i18n import set_lang, t
+
+if getattr(sys, "frozen", False):  # the built TuneCast.exe
     ROOT = Path(sys.executable).resolve().parent
 else:
     ROOT = Path(__file__).resolve().parent.parent
@@ -20,7 +22,6 @@ DATA = ROOT / "data"
 SETTINGS = DATA / "settings.env"
 REDIRECT_URI = "http://127.0.0.1:8888/callback"
 APP_NAME = "TuneCast"
-DESCRIPTION = "Управляй Spotify из Telegram"
 
 REQUIRED = ("BOT_TOKEN", "ALLOWED_USER_IDS", "SPOTIFY_CLIENT_ID", "SPOTIFY_CLIENT_SECRET")
 
@@ -29,7 +30,7 @@ def _bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
     if value is None or value.strip() == "":
         return default
-    return value.strip().lower() in ("1", "true", "yes", "on", "да")
+    return value.strip().lower() in ("1", "true", "yes", "on")
 
 
 def _num(name: str, default: float) -> float:
@@ -55,6 +56,12 @@ class Config:
 
 def reload_settings() -> None:
     load_dotenv(SETTINGS, override=True)
+    set_lang(os.getenv("LANGUAGE", "").strip() or "en")
+
+
+def has_language() -> bool:
+    reload_settings()
+    return bool(os.getenv("LANGUAGE", "").strip())
 
 
 def is_configured() -> bool:
@@ -63,7 +70,7 @@ def is_configured() -> bool:
 
 
 def save_settings(values: dict[str, str]) -> None:
-    """Дописать или обновить значения в data/settings.env."""
+    """Add or update values in data/settings.env."""
     DATA.mkdir(parents=True, exist_ok=True)
     current: dict[str, str] = {}
     if SETTINGS.exists():
@@ -73,8 +80,8 @@ def save_settings(values: dict[str, str]) -> None:
                 current[key.strip()] = value.strip()
     current.update({k: str(v) for k, v in values.items()})
     lines = [
-        "# Настройки TuneCast. Файл хранится только на этом компьютере.",
-        "# Никому его не отправляй: здесь ключи от твоего бота и Spotify.",
+        "# TuneCast settings. This file stays on this computer only.",
+        "# Never share it: it contains the keys to your bot and Spotify.",
         "",
     ]
     lines += [f"{key}={value}" for key, value in current.items()]
@@ -86,7 +93,7 @@ def load_config() -> Config:
     reload_settings()
     missing = [key for key in REQUIRED if not os.getenv(key, "").strip()]
     if missing:
-        raise SystemExit("Не заполнены настройки: " + ", ".join(missing) + ". Запусти TuneCast.exe --setup")
+        raise SystemExit(t("run.not_configured", keys=", ".join(missing)))
 
     ids = frozenset(
         int(part) for part in os.getenv("ALLOWED_USER_IDS", "").replace(";", ",").split(",") if part.strip()

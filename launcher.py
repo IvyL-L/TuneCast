@@ -1,4 +1,4 @@
-"""Точка входа для сборки TuneCast.exe (PyInstaller)."""
+"""Entry point for building TuneCast.exe (PyInstaller)."""
 
 import sys
 

@@ -1,4 +1,4 @@
-"""Запуск TuneCast: мастер настройки при первом запуске, затем бот."""
+"""TuneCast entry point: the setup wizard on first run, then the bot."""
 
 import asyncio
 import logging
@@ -9,14 +9,16 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramRetryAfter
-from aiogram.types import BotCommand, LinkPreviewOptions
+from aiogram.types import LinkPreviewOptions
 from rich.logging import RichHandler
 from rich.panel import Panel
 
 from . import __version__
-from .config import APP_NAME, DATA, DESCRIPTION, is_configured, load_config
+from .botmeta import set_commands, set_profile
+from .config import APP_NAME, DATA, is_configured, load_config, reload_settings
 from .emoji import Emoji
 from .handlers import PremiumWatcher, build_router
+from .i18n import t
 from .panel import Panel as PlayerPanel
 from .setup import GREEN, console, run_wizard
 from .spotify import Spotify
@@ -26,7 +28,7 @@ log = logging.getLogger("tunecast")
 
 
 async def sync_emoji(bot: Bot, emoji: Emoji, panel: PlayerPanel, owner_id: int) -> None:
-    """Создать паки эмодзи в фоне. Telegram ограничивает частоту, поэтому повторяем."""
+    """Create the emoji packs in the background. Telegram rate-limits this, so keep retrying."""
     while True:
         try:
             before = dict(emoji.ids)
@@ -35,10 +37,10 @@ async def sync_emoji(bot: Bot, emoji: Emoji, panel: PlayerPanel, owner_id: int) 
                 await panel.redraw()
             return
         except TelegramRetryAfter as exc:
-            log.info("Эмодзи: Telegram просит подождать %s с, продолжу сам", exc.retry_after)
+            log.info("Emoji: Telegram asks to wait %s s, will continue automatically", exc.retry_after)
             await asyncio.sleep(exc.retry_after + 2)
         except Exception:
-            log.exception("Эмодзи: не удалось создать паки, пока будут обычные эмодзи")
+            log.exception("Emoji: could not create the packs, regular emoji will be used for now")
             return
 
 
@@ -77,24 +79,16 @@ async def run_bot() -> None:
     dp.callback_query.outer_middleware(watcher)
     dp.include_router(build_router(cfg.allowed_ids))
 
-    await bot.set_my_commands(
-        [
-            BotCommand(command="start", description="🎧 Плеер"),
-            BotCommand(command="queue", description="📜 Очередь"),
-            BotCommand(command="playlists", description="📚 Плейлисты"),
-            BotCommand(command="devices", description="📱 Устройства"),
-            BotCommand(command="emoji", description="✨ Свои эмодзи"),
-            BotCommand(command="help", description="❓ Помощь"),
-        ]
-    )
+    await set_commands(bot)
+    await set_profile(bot)
     bot_me = await bot.get_me()
     console.print()
     console.print(
         Panel(
-            f"[bold {GREEN}]{APP_NAME} работает[/]  ·  бот [bold]@{bot_me.username}[/]\n\n"
-            f"Напиши боту [bold]/start[/]: https://t.me/{bot_me.username}\n"
-            f"Трек в профиле: {'[green]включён[/]' if profile else '[dim]выключен[/]'}\n\n"
-            "[dim]Бот работает, пока открыто это окно. Остановить: закрыть окно или Ctrl+C[/]",
+            f"[bold {GREEN}]{t('run.title', app=APP_NAME)}[/]  ·  {t('run.bot')} [bold]@{bot_me.username}[/]\n\n"
+            f"{t('run.write_start')}: https://t.me/{bot_me.username}\n"
+            f"{t('run.profile')}: {'[green]' + t('run.on') + '[/]' if profile else '[dim]' + t('run.off') + '[/]'}\n\n"
+            f"[dim]{t('run.hint')}[/]",
             border_style=GREEN,
             padding=(1, 2),
         )
@@ -134,29 +128,29 @@ def main() -> None:
         print(f"{APP_NAME} {__version__}")
         return
     setup_logging()
+    reload_settings()  # picks up the saved language
     frozen = getattr(sys, "frozen", False)
 
     def pause() -> None:
-        # Окно exe закрывается сразу после выхода — даём прочитать сообщение
+        # The exe window closes right after exit — give the user a chance to read the message
         if frozen:
             try:
-                input("Нажми Enter, чтобы закрыть окно…")
+                input(t("run.press_enter"))
             except (EOFError, KeyboardInterrupt):
                 pass
 
     try:
-        console.print(f"[bold {GREEN}]{APP_NAME}[/] [dim]{__version__} · {DESCRIPTION}[/]")
+        console.print(f"[bold {GREEN}]{APP_NAME}[/] [dim]{__version__} · {t('app.tagline')}[/]")
         if "--setup" in args or not is_configured():
             try:
                 run_wizard()
             except (EOFError, KeyboardInterrupt):
-                console.print("\n[yellow]Настройка прервана.[/] Уже введённое сохранено, при следующем запуске "
-                              "мастер продолжит с этими значениями.")
+                console.print(f"\n[yellow]{t('run.setup_interrupted')}[/]")
                 pause()
                 return
         asyncio.run(run_bot())
     except KeyboardInterrupt:
-        console.print("\n[dim]TuneCast остановлен[/]")
+        console.print(f"\n[dim]{t('run.stopped')}[/]")
     except SystemExit as exc:
         if exc.code not in (None, 0):
             if isinstance(exc.code, str):
@@ -165,7 +159,6 @@ def main() -> None:
         raise
     except Exception:
         console.print_exception()
-        console.print("[red]TuneCast остановился из-за ошибки выше.[/] Если не получается разобраться, "
-                      "создай issue на GitHub и приложи текст ошибки (без ключей!).")
+        console.print(f"[red]{t('run.crashed')}[/]")
         pause()
         sys.exit(1)

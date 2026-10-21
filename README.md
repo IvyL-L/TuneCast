@@ -21,8 +21,8 @@ Runs on your own computer, no third-party servers.
 
 </div>
 
-> [!NOTE]
-> The bot interface and the setup wizard are currently in **Russian**.
+> [!TIP]
+> The bot and the setup wizard speak **English** and **Russian**. Pick a language on first run and switch anytime with `/language`.
 
 ---
 
@@ -71,6 +71,7 @@ To change settings later, run `TuneCast.exe --setup` (press Enter to keep the cu
 | `/playlists` | Playlists |
 | `/devices` | Pick a device |
 | `/emoji` | Replace icons with your own emoji |
+| `/language` | Switch language (English / Русский) |
 | `/help` | Help |
 
 You can also just send a track name, or a link to a Spotify playlist, album, artist or track.
@@ -103,6 +104,8 @@ To build your own `TuneCast.exe`, run `build.bat`; the file will appear in `dist
 ```
 tunecast/
   app.py            entry point: setup wizard, then the bot
+  i18n.py           all texts in English and Russian
+  botmeta.py        command menu and bot description
   setup.py          first-run setup wizard
   config.py         settings in data/settings.env
   spotify.py        Spotify Web API client and login
