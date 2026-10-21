@@ -1,0 +1,15 @@
+# Личные данные: ключи, токены, сессии. Никогда не коммить!
+data/
+*.env
+!.env.example
+*.session
+*.session-journal
+
+# Сборка
+build/
+dist/
+*.spec
+.venv*/
+__pycache__/
+*.pyc
+*.log

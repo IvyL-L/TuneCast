@@ -1,0 +1,5 @@
+aiogram==3.31.0
+telethon==1.45.0
+httpx==0.28.1
+python-dotenv>=1.0
+rich>=14.0
