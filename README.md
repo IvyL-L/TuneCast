@@ -17,7 +17,7 @@ Runs on your own computer, no third-party servers.
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-1ed760)
 
-<img src="assets/preview.png" width="380" alt="TuneCast player in Telegram">
+<img src="assets/preview.en.png" width="380" alt="TuneCast player in Telegram">
 
 </div>
 
